@@ -69,7 +69,7 @@ class DenoisingAutoencoder(BaseEstimator):
                 print 'Training epoch %d, cost ' % epoch, numpy.mean(c)
 
 
-    def predict(self,X):
+    def transform(self,X):
         z = self.da.get_prediction()
         predict_da = theano.function([self.x],z)
         return predict_da(X)
