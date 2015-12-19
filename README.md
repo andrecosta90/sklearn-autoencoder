@@ -8,4 +8,4 @@ Denoising Autoencoder wrapper (from Theano) to sklearn (scikit-learn)
 
 <code>da.fit(X)</code>
 
-<code>new_X = da.predict(X)</code>
+<code>new_X = da.transform(X)</code>
