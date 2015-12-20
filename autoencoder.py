@@ -6,6 +6,7 @@ import theano
 import theano.tensor as T
 from theano.tensor.shared_randomstreams import RandomStreams
 
+
 class DenoisingAutoencoder(BaseEstimator):
     def __init__(self, n_hidden, learning_rate = 0.1, training_epochs = 20, corruption_level = 0.3, batch_size = 20, verbose=False):
         self.n_visible = None
@@ -20,7 +21,11 @@ class DenoisingAutoencoder(BaseEstimator):
         self.x = T.matrix('x')
 
     def load_data(self,X):
-        shared_x = theano.shared(numpy.asarray(X.as_matrix(), dtype=theano.config.floatX), borrow=True)
+        try:
+            matrix = X.as_matrix()
+        except AttributeError:
+            matrix = X
+        shared_x = theano.shared(numpy.asarray(matrix, dtype=theano.config.floatX), borrow=True)
         return shared_x
         
     def fit(self,X):
@@ -69,7 +74,7 @@ class DenoisingAutoencoder(BaseEstimator):
                 print 'Training epoch %d, cost ' % epoch, numpy.mean(c)
 
 
-    def transform(self,X):
+    def predict(self,X):
         z = self.da.get_prediction()
         predict_da = theano.function([self.x],z)
         return predict_da(X)
