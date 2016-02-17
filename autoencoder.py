@@ -78,3 +78,10 @@ class DenoisingAutoencoder(BaseEstimator):
         z = self.da.get_prediction()
         predict_da = theano.function([self.x],z)
         return predict_da(X)
+
+    def transform_latent_representation(self,X):
+        h = self.da.get_latent_representation()
+        predict_da = theano.function([self.x],h)
+        return predict_da(X)
+
+
