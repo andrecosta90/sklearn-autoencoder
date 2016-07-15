@@ -10,6 +10,6 @@ Denoising Autoencoder wrapper (from Theano) to sklearn (scikit-learn)
 
 <code>new_X = da.transform(X)</code>
 
-##### To reduce the dimensionality of X (in this case, short_X will have 10 features, because n_hidden=10)
+##### To change the dimensionality of X (in this case, changed_X will have "n_hidden" features)
 
-<code> short_X = da.transform_latent_representation(X)
+<code> changed_X = da.transform_latent_representation(X)
