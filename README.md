@@ -46,6 +46,27 @@ model = make_pipeline(
 Because `score` needs no targets, `GridSearchCV` can tune the autoencoder on
 its own reconstruction error.
 
+### Stopping and streaming
+
+As in `MLPRegressor`, training stops once the loss fails to improve by `tol`
+for more than `n_iter_no_change` epochs. With `early_stopping=True` it holds out
+`validation_fraction` of the data, stops on the validation score instead and
+restores the weights of the best epoch:
+
+```python
+ae = DenoisingAutoencoder(early_stopping=True, n_iter_no_change=5).fit(X)
+ae.validation_scores_, ae.best_validation_score_
+```
+
+For data that does not fit in memory, `partial_fit` trains one epoch per chunk:
+
+```python
+ae = DenoisingAutoencoder()
+for epoch in range(20):
+    for chunk in load_chunks():  # your own iterator of arrays
+        ae.partial_fit(chunk)
+```
+
 ### Parameters
 
 | Parameter            | Default     | Meaning                                                     |
@@ -56,7 +77,11 @@ its own reconstruction error.
 | `noise_level`        | `0.3`       | Masking probability, or Gaussian std.                       |
 | `loss`               | `"mse"`     | `"mse"`, or `"bce"` for data in [0, 1].                     |
 | `learning_rate`      | `1e-3`      | Adam learning rate.                                         |
-| `max_iter`           | `200`       | Training epochs.                                            |
+| `max_iter`           | `200`       | Maximum training epochs.                                    |
+| `tol`                | `1e-4`      | Minimum improvement that resets the patience counter.       |
+| `n_iter_no_change`   | `10`        | Patience, in epochs, before stopping.                       |
+| `early_stopping`     | `False`     | Stop on a held-out validation score, keep the best weights. |
+| `validation_fraction`| `0.1`       | Share of data held out when `early_stopping` is on.         |
 | `batch_size`         | `64`        | Minibatch size.                                             |
 | `random_state`       | `None`      | Seed for init, shuffling and corruption.                    |
 | `device`             | `"auto"`    | Torch device; `"auto"` uses CUDA when available.            |
