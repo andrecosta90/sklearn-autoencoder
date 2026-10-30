@@ -105,19 +105,25 @@ class DenoisingAutoencoder(
 
     def fit(self, X, y=None):
         X = validate_data(self, X, dtype=FLOAT_DTYPES)
+        activation = _lookup(ACTIVATIONS, "activation", self.activation)
+        corruption = _lookup(CORRUPTIONS, "corruption", self.corruption)
+        criterion, output_activation = _lookup(LOSSES, "loss", self.loss)
+        self._check_noise_level()
+        if self.loss == "bce" and (X.min() < 0 or X.max() > 1):
+            raise ValueError("loss='bce' requires X to lie in [0, 1].")
+
         self.device_ = _resolve_device(self.device)
         seed = check_random_state(self.random_state).randint(np.iinfo(np.int32).max)
 
         # Seed torch locally so fitting never touches the caller's global RNG.
-        criterion, output_activation = LOSSES[self.loss]
         forked = [self.device_] if self.device_.type == "cuda" else []
         with torch.random.fork_rng(devices=forked):
             torch.manual_seed(seed)
             self.module_ = Autoencoder(
                 n_features=X.shape[1],
                 hidden_layer_sizes=self.hidden_layer_sizes,
-                activation=ACTIVATIONS[self.activation],
-                corruption=CORRUPTIONS[self.corruption](self.noise_level),
+                activation=activation,
+                corruption=corruption(self.noise_level),
                 output_activation=output_activation(),
             ).to(self.device_)
             self.loss_curve_ = self._train(self._to_tensor(X), criterion())
@@ -144,6 +150,18 @@ class DenoisingAutoencoder(
         check_is_fitted(self)
         X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=False)
         return -float(((X - self._predict(self.module_.reconstruct, X)) ** 2).mean())
+
+    def _check_noise_level(self):
+        if self.corruption == "masking" and not 0 <= self.noise_level < 1:
+            raise ValueError(
+                "noise_level is a masking probability and must lie in [0, 1), "
+                f"got {self.noise_level}."
+            )
+        if self.corruption == "gaussian" and self.noise_level < 0:
+            raise ValueError(
+                "noise_level is a noise std and must be non-negative, "
+                f"got {self.noise_level}."
+            )
 
     def _train(self, X: torch.Tensor, criterion: nn.Module) -> list[float]:
         loader = DataLoader(
@@ -183,6 +201,15 @@ class DenoisingAutoencoder(
         tags = super().__sklearn_tags__()
         tags.transformer_tags.preserves_dtype = ["float64", "float32"]
         return tags
+
+
+def _lookup(options: dict, name: str, value):
+    try:
+        return options[value]
+    except KeyError:
+        raise ValueError(
+            f"{name} must be one of {sorted(options)}, got {value!r}."
+        ) from None
 
 
 def _resolve_device(device: str) -> torch.device:
