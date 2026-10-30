@@ -49,7 +49,9 @@ class Autoencoder(nn.Module):
     """Corrupt -> encode -> decode. The decoder mirrors the encoder.
 
     One hidden size gives the classic denoising autoencoder; several give a
-    stacked (deep) one, trained end to end.
+    stacked (deep) one, trained end to end. ``forward`` returns the raw decoder
+    output (e.g. logits) for numerically stable losses; ``decode`` applies
+    ``output_activation`` on top to yield reconstructions.
     """
 
     def __init__(
@@ -58,12 +60,20 @@ class Autoencoder(nn.Module):
         hidden_layer_sizes: Sequence[int],
         activation: type[nn.Module],
         corruption: nn.Module,
+        output_activation: nn.Module,
     ) -> None:
         super().__init__()
         sizes = [n_features, *hidden_layer_sizes]
         self.corruption = corruption
         self.encoder = mlp(sizes, activation, activate_last=True)
         self.decoder = mlp(sizes[::-1], activation, activate_last=False)
+        self.output_activation = output_activation
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.decoder(self.encoder(self.corruption(x)))
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return self.output_activation(self.decoder(z))
+
+    def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
+        return self.decode(self.encoder(self.corruption(x)))

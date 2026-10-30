@@ -23,6 +23,11 @@ from ._network import Autoencoder, GaussianNoise, MaskingNoise
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "sigmoid": nn.Sigmoid}
 CORRUPTIONS = {"masking": MaskingNoise, "gaussian": GaussianNoise}
+# loss name -> (criterion on raw decoder output, activation giving reconstructions)
+LOSSES = {
+    "mse": (nn.MSELoss, nn.Identity),
+    "bce": (nn.BCEWithLogitsLoss, nn.Sigmoid),
+}
 
 
 class DenoisingAutoencoder(
@@ -44,6 +49,9 @@ class DenoisingAutoencoder(
         How inputs are corrupted during training.
     noise_level : float, default=0.3
         Corruption strength: masking probability, or Gaussian noise std.
+    loss : {"mse", "bce"}, default="mse"
+        Reconstruction loss. ``"bce"`` (binary cross-entropy, as in Vincent et
+        al., 2008) requires ``X`` in [0, 1] and yields reconstructions in [0, 1].
     learning_rate : float, default=1e-3
         Adam learning rate.
     max_iter : int, default=200
@@ -75,6 +83,7 @@ class DenoisingAutoencoder(
         activation="relu",
         corruption="masking",
         noise_level=0.3,
+        loss="mse",
         learning_rate=1e-3,
         max_iter=200,
         batch_size=64,
@@ -86,6 +95,7 @@ class DenoisingAutoencoder(
         self.activation = activation
         self.corruption = corruption
         self.noise_level = noise_level
+        self.loss = loss
         self.learning_rate = learning_rate
         self.max_iter = max_iter
         self.batch_size = batch_size
@@ -99,6 +109,7 @@ class DenoisingAutoencoder(
         seed = check_random_state(self.random_state).randint(np.iinfo(np.int32).max)
 
         # Seed torch locally so fitting never touches the caller's global RNG.
+        criterion, output_activation = LOSSES[self.loss]
         forked = [self.device_] if self.device_.type == "cuda" else []
         with torch.random.fork_rng(devices=forked):
             torch.manual_seed(seed)
@@ -107,8 +118,9 @@ class DenoisingAutoencoder(
                 hidden_layer_sizes=self.hidden_layer_sizes,
                 activation=ACTIVATIONS[self.activation],
                 corruption=CORRUPTIONS[self.corruption](self.noise_level),
+                output_activation=output_activation(),
             ).to(self.device_)
-            self.loss_curve_ = self._train(self._to_tensor(X))
+            self.loss_curve_ = self._train(self._to_tensor(X), criterion())
         self.n_iter_ = len(self.loss_curve_)
         return self
 
@@ -125,20 +137,19 @@ class DenoisingAutoencoder(
                 f"X has {X.shape[1]} features, but {type(self).__name__} "
                 f"expects codes with {self._n_features_out} features."
             )
-        return self._predict(self.module_.decoder, X)
+        return self._predict(self.module_.decode, X)
 
     def score(self, X, y=None):
         """Negative mean squared reconstruction error (higher is better)."""
         check_is_fitted(self)
         X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=False)
-        return -float(((X - self._predict(self.module_, X)) ** 2).mean())
+        return -float(((X - self._predict(self.module_.reconstruct, X)) ** 2).mean())
 
-    def _train(self, X: torch.Tensor) -> list[float]:
+    def _train(self, X: torch.Tensor, criterion: nn.Module) -> list[float]:
         loader = DataLoader(
             TensorDataset(X), batch_size=min(self.batch_size, len(X)), shuffle=True
         )
         optimizer = torch.optim.Adam(self.module_.parameters(), lr=self.learning_rate)
-        loss_fn = nn.MSELoss()
         loss_curve = []
 
         self.module_.train()
@@ -146,7 +157,7 @@ class DenoisingAutoencoder(
             epoch_loss = 0.0
             for (batch,) in loader:
                 optimizer.zero_grad()
-                loss = loss_fn(self.module_(batch), batch)
+                loss = criterion(self.module_(batch), batch)
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item() * len(batch)

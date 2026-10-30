@@ -81,3 +81,15 @@ def test_gaussian_autoencoder_repairs_noisy_inputs(low_rank_data):
     assert ((repaired - low_rank_data) ** 2).mean() < 0.5 * (
         (noisy - low_rank_data) ** 2
     ).mean()
+
+
+def test_bce_loss_reconstructs_unit_interval_data_within_bounds(low_rank_data):
+    probabilities = 1 / (1 + np.exp(-low_rank_data))
+    ae = DenoisingAutoencoder(loss="bce", random_state=0, device="cpu")
+
+    reconstruction = ae.fit(probabilities).inverse_transform(
+        ae.transform(probabilities)
+    )
+
+    assert reconstruction.min() >= 0 and reconstruction.max() <= 1
+    assert mean_squared_error_vs_mean_baseline(probabilities, reconstruction) < 0.25
