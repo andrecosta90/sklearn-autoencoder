@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from sklearn.model_selection import GridSearchCV
 
 from sklearn_autoencoder import DenoisingAutoencoder
 
@@ -32,3 +33,23 @@ def test_reconstructs_low_rank_data_far_better_than_the_mean(
 
     assert reconstruction.shape == low_rank_data.shape
     assert mean_squared_error_vs_mean_baseline(low_rank_data, reconstruction) < 0.25
+
+
+def test_score_is_higher_for_a_better_trained_model(low_rank_data):
+    barely_trained = DenoisingAutoencoder(max_iter=1, random_state=0, device="cpu")
+    well_trained = DenoisingAutoencoder(max_iter=200, random_state=0, device="cpu")
+
+    barely_trained.fit(low_rank_data)
+    well_trained.fit(low_rank_data)
+
+    assert well_trained.score(low_rank_data) > barely_trained.score(low_rank_data)
+
+
+def test_grid_search_selects_hyperparameters_without_targets(low_rank_data):
+    search = GridSearchCV(
+        DenoisingAutoencoder(random_state=0, device="cpu"),
+        param_grid={"max_iter": [1, 100]},
+        cv=3,
+    ).fit(low_rank_data)
+
+    assert search.best_params_ == {"max_iter": 100}

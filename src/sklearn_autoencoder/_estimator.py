@@ -127,6 +127,12 @@ class DenoisingAutoencoder(
             )
         return self._predict(self.module_.decoder, X)
 
+    def score(self, X, y=None):
+        """Negative mean squared reconstruction error (higher is better)."""
+        check_is_fitted(self)
+        X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=False)
+        return -float(((X - self._predict(self.module_, X)) ** 2).mean())
+
     def _train(self, X: torch.Tensor) -> list[float]:
         loader = DataLoader(
             TensorDataset(X), batch_size=min(self.batch_size, len(X)), shuffle=True
