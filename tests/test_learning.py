@@ -93,3 +93,17 @@ def test_bce_loss_reconstructs_unit_interval_data_within_bounds(low_rank_data):
 
     assert reconstruction.min() >= 0 and reconstruction.max() <= 1
     assert mean_squared_error_vs_mean_baseline(probabilities, reconstruction) < 0.25
+
+
+def test_decodes_arbitrary_codes_back_to_input_space(low_rank_data):
+    """Issue #1: map a hidden representation obtained elsewhere back to X."""
+    ae = DenoisingAutoencoder(
+        hidden_layer_sizes=(16, 8), random_state=0, device="cpu"
+    ).fit(low_rank_data)
+    codes_from_elsewhere = np.random.default_rng(1).random((5, 8))
+
+    decoded = ae.inverse_transform(codes_from_elsewhere)
+
+    assert decoded.shape == (5, low_rank_data.shape[1])
+    with pytest.raises(ValueError, match="expects codes with 8 features"):
+        ae.inverse_transform(codes_from_elsewhere[:, :4])

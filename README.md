@@ -21,9 +21,9 @@ from sklearn_autoencoder import DenoisingAutoencoder
 
 ae = DenoisingAutoencoder(hidden_layer_sizes=(10,), random_state=0).fit(X)
 
-codes = ae.transform(X)                       # (n_samples, 10) latent codes
+codes = ae.transform(X)  # (n_samples, 10) latent codes
 reconstruction = ae.inverse_transform(codes)  # back to input space
-ae.score(X)                                   # -MSE, higher is better
+ae.score(X)  # -MSE, higher is better
 ```
 
 A stacked autoencoder is just more layers; the decoder mirrors the encoder and
