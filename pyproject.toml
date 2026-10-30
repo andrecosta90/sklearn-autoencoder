@@ -31,6 +31,8 @@ explicit = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+# Tests use small max_iter on purpose; tests about convergence opt back in.
+filterwarnings = ["ignore::sklearn.exceptions.ConvergenceWarning"]
 
 [tool.ruff]
 line-length = 88

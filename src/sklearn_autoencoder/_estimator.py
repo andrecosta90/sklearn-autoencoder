@@ -1,6 +1,8 @@
 """scikit-learn adapter around :class:`~sklearn_autoencoder._network.Autoencoder`."""
 
+import warnings
 from collections.abc import Callable
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -9,6 +11,7 @@ from sklearn.base import (
     ClassNamePrefixFeaturesOutMixin,
     TransformerMixin,
 )
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import (
     FLOAT_DTYPES,
@@ -55,7 +58,12 @@ class DenoisingAutoencoder(
     learning_rate : float, default=1e-3
         Adam learning rate.
     max_iter : int, default=200
-        Number of training epochs.
+        Maximum number of training epochs.
+    tol : float, default=1e-4
+        Training stops once the loss fails to improve by at least ``tol`` for
+        more than ``n_iter_no_change`` consecutive epochs.
+    n_iter_no_change : int, default=10
+        Patience, in epochs, of the stopping rule above.
     batch_size : int, default=64
         Minibatch size (clipped to the number of samples).
     random_state : int, RandomState instance or None, default=None
@@ -71,6 +79,8 @@ class DenoisingAutoencoder(
         The trained network.
     loss_curve_ : list of float
         Mean training loss per epoch.
+    best_loss_ : float
+        Lowest training loss reached.
     n_iter_ : int
         Number of epochs run.
     n_features_in_ : int
@@ -86,6 +96,8 @@ class DenoisingAutoencoder(
         loss="mse",
         learning_rate=1e-3,
         max_iter=200,
+        tol=1e-4,
+        n_iter_no_change=10,
         batch_size=64,
         random_state=None,
         device="auto",
@@ -98,6 +110,8 @@ class DenoisingAutoencoder(
         self.loss = loss
         self.learning_rate = learning_rate
         self.max_iter = max_iter
+        self.tol = tol
+        self.n_iter_no_change = n_iter_no_change
         self.batch_size = batch_size
         self.random_state = random_state
         self.device = device
@@ -105,29 +119,20 @@ class DenoisingAutoencoder(
 
     def fit(self, X, y=None):
         X = validate_data(self, X, dtype=FLOAT_DTYPES)
-        activation = _lookup(ACTIVATIONS, "activation", self.activation)
-        corruption = _lookup(CORRUPTIONS, "corruption", self.corruption)
-        criterion, output_activation = _lookup(LOSSES, "loss", self.loss)
-        self._check_noise_level()
-        if self.loss == "bce" and (X.min() < 0 or X.max() > 1):
-            raise ValueError("loss='bce' requires X to lie in [0, 1].")
-
-        self.device_ = _resolve_device(self.device)
-        seed = check_random_state(self.random_state).randint(np.iinfo(np.int32).max)
-
-        # Seed torch locally so fitting never touches the caller's global RNG.
-        forked = [self.device_] if self.device_.type == "cuda" else []
-        with torch.random.fork_rng(devices=forked):
-            torch.manual_seed(seed)
-            self.module_ = Autoencoder(
-                n_features=X.shape[1],
-                hidden_layer_sizes=self.hidden_layer_sizes,
-                activation=activation,
-                corruption=corruption(self.noise_level),
-                output_activation=output_activation(),
-            ).to(self.device_)
-            self.loss_curve_ = self._train(self._to_tensor(X), criterion())
-        self.n_iter_ = len(self.loss_curve_)
+        self._initialize(X)
+        X_train = self._to_tensor(X)
+        for _ in range(self.max_iter):
+            self._run_epoch(X_train)
+            self._update_no_improvement_count()
+            if self._no_improvement_count > self.n_iter_no_change:
+                break
+        else:
+            warnings.warn(
+                f"Maximum iterations (max_iter={self.max_iter}) reached and the "
+                "optimization hasn't converged yet.",
+                ConvergenceWarning,
+                stacklevel=2,
+            )
         return self
 
     def transform(self, X):
@@ -163,27 +168,68 @@ class DenoisingAutoencoder(
                 f"got {self.noise_level}."
             )
 
-    def _train(self, X: torch.Tensor, criterion: nn.Module) -> list[float]:
+    def _initialize(self, X):
+        activation = _lookup(ACTIVATIONS, "activation", self.activation)
+        corruption = _lookup(CORRUPTIONS, "corruption", self.corruption)
+        criterion, output_activation = _lookup(LOSSES, "loss", self.loss)
+        self._check_noise_level()
+        if self.loss == "bce" and (X.min() < 0 or X.max() > 1):
+            raise ValueError("loss='bce' requires X to lie in [0, 1].")
+
+        self.device_ = _resolve_device(self.device)
+        self._random_state = check_random_state(self.random_state)
+        with self._local_torch_rng():
+            self.module_ = Autoencoder(
+                n_features=X.shape[1],
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                activation=activation,
+                corruption=corruption(self.noise_level),
+                output_activation=output_activation(),
+            ).to(self.device_)
+        self._criterion = criterion()
+        self._optimizer = torch.optim.Adam(
+            self.module_.parameters(), lr=self.learning_rate
+        )
+        self.loss_curve_ = []
+        self.best_loss_ = np.inf
+        self.n_iter_ = 0
+        self._no_improvement_count = 0
+
+    def _run_epoch(self, X: torch.Tensor) -> None:
         loader = DataLoader(
             TensorDataset(X), batch_size=min(self.batch_size, len(X)), shuffle=True
         )
-        optimizer = torch.optim.Adam(self.module_.parameters(), lr=self.learning_rate)
-        loss_curve = []
-
+        epoch_loss = 0.0
         self.module_.train()
-        for epoch in range(self.max_iter):
-            epoch_loss = 0.0
+        with self._local_torch_rng():
             for (batch,) in loader:
-                optimizer.zero_grad()
-                loss = criterion(self.module_(batch), batch)
+                self._optimizer.zero_grad()
+                loss = self._criterion(self.module_(batch), batch)
                 loss.backward()
-                optimizer.step()
+                self._optimizer.step()
                 epoch_loss += loss.item() * len(batch)
-            loss_curve.append(epoch_loss / len(X))
-            if self.verbose:
-                print(f"Epoch {epoch + 1}/{self.max_iter}, loss: {loss_curve[-1]:.6f}")
         self.module_.eval()
-        return loss_curve
+
+        self.n_iter_ += 1
+        self.loss_curve_.append(epoch_loss / len(X))
+        if self.verbose:
+            print(f"Epoch {self.n_iter_}, loss: {self.loss_curve_[-1]:.6f}")
+
+    def _update_no_improvement_count(self):
+        loss = self.loss_curve_[-1]
+        if loss > self.best_loss_ - self.tol:
+            self._no_improvement_count += 1
+        else:
+            self._no_improvement_count = 0
+        self.best_loss_ = min(self.best_loss_, loss)
+
+    @contextmanager
+    def _local_torch_rng(self):
+        """Seed torch from ``random_state`` without touching the global RNG."""
+        forked = [self.device_] if self.device_.type == "cuda" else []
+        with torch.random.fork_rng(devices=forked):
+            torch.manual_seed(self._random_state.randint(np.iinfo(np.int32).max))
+            yield
 
     def _predict(self, network: Callable[[torch.Tensor], torch.Tensor], X):
         with torch.inference_mode():
