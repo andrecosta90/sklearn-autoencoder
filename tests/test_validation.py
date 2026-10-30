@@ -26,3 +26,8 @@ def test_invalid_parameters_raise_a_clear_error(params, message):
 def test_bce_loss_rejects_data_outside_the_unit_interval():
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         DenoisingAutoencoder(loss="bce").fit(X - 0.5)
+
+
+def test_early_stopping_rejects_a_validation_set_too_small_to_score():
+    with pytest.raises(ValueError, match="validation_fraction"):
+        DenoisingAutoencoder(early_stopping=True, validation_fraction=0.05).fit(X)

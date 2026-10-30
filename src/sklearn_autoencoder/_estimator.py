@@ -1,5 +1,6 @@
 """scikit-learn adapter around :class:`~sklearn_autoencoder._network.Autoencoder`."""
 
+import copy
 import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from sklearn.base import (
     TransformerMixin,
 )
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.model_selection import train_test_split
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import (
     FLOAT_DTYPES,
@@ -60,10 +62,16 @@ class DenoisingAutoencoder(
     max_iter : int, default=200
         Maximum number of training epochs.
     tol : float, default=1e-4
-        Training stops once the loss fails to improve by at least ``tol`` for
-        more than ``n_iter_no_change`` consecutive epochs.
+        Training stops once the loss (or validation score, with
+        ``early_stopping``) fails to improve by at least ``tol`` for more than
+        ``n_iter_no_change`` consecutive epochs.
     n_iter_no_change : int, default=10
         Patience, in epochs, of the stopping rule above.
+    early_stopping : bool, default=False
+        Hold out ``validation_fraction`` of the data, stop on its score and
+        restore the weights of the best validation epoch.
+    validation_fraction : float, default=0.1
+        Share of the data held out when ``early_stopping`` is True.
     batch_size : int, default=64
         Minibatch size (clipped to the number of samples).
     random_state : int, RandomState instance or None, default=None
@@ -81,6 +89,10 @@ class DenoisingAutoencoder(
         Mean training loss per epoch.
     best_loss_ : float
         Lowest training loss reached.
+    validation_scores_ : list of float or None
+        Validation score per epoch, when ``early_stopping`` is True.
+    best_validation_score_ : float or None
+        Best validation score, when ``early_stopping`` is True.
     n_iter_ : int
         Number of epochs run.
     n_features_in_ : int
@@ -98,6 +110,8 @@ class DenoisingAutoencoder(
         max_iter=200,
         tol=1e-4,
         n_iter_no_change=10,
+        early_stopping=False,
+        validation_fraction=0.1,
         batch_size=64,
         random_state=None,
         device="auto",
@@ -112,6 +126,8 @@ class DenoisingAutoencoder(
         self.max_iter = max_iter
         self.tol = tol
         self.n_iter_no_change = n_iter_no_change
+        self.early_stopping = early_stopping
+        self.validation_fraction = validation_fraction
         self.batch_size = batch_size
         self.random_state = random_state
         self.device = device
@@ -120,10 +136,11 @@ class DenoisingAutoencoder(
     def fit(self, X, y=None):
         X = validate_data(self, X, dtype=FLOAT_DTYPES)
         self._initialize(X)
-        X_train = self._to_tensor(X)
+        X_train, X_val = self._split_validation(X)
+        X_train = self._to_tensor(X_train)
         for _ in range(self.max_iter):
             self._run_epoch(X_train)
-            self._update_no_improvement_count()
+            self._update_no_improvement_count(X_val)
             if self._no_improvement_count > self.n_iter_no_change:
                 break
         else:
@@ -133,6 +150,8 @@ class DenoisingAutoencoder(
                 ConvergenceWarning,
                 stacklevel=2,
             )
+        if self.early_stopping:
+            self.module_.load_state_dict(self._best_state)
         return self
 
     def transform(self, X):
@@ -191,9 +210,24 @@ class DenoisingAutoencoder(
             self.module_.parameters(), lr=self.learning_rate
         )
         self.loss_curve_ = []
-        self.best_loss_ = np.inf
         self.n_iter_ = 0
+        self.best_loss_ = np.inf
+        self.validation_scores_ = [] if self.early_stopping else None
+        self.best_validation_score_ = -np.inf if self.early_stopping else None
         self._no_improvement_count = 0
+
+    def _split_validation(self, X):
+        if not self.early_stopping:
+            return X, None
+        X_train, X_val = train_test_split(
+            X, test_size=self.validation_fraction, random_state=self._random_state
+        )
+        if len(X_val) < 2:
+            raise ValueError(
+                "The validation set is too small. Increase 'validation_fraction' "
+                "or the size of your dataset."
+            )
+        return X_train, X_val
 
     def _run_epoch(self, X: torch.Tensor) -> None:
         loader = DataLoader(
@@ -215,13 +249,23 @@ class DenoisingAutoencoder(
         if self.verbose:
             print(f"Epoch {self.n_iter_}, loss: {self.loss_curve_[-1]:.6f}")
 
-    def _update_no_improvement_count(self):
-        loss = self.loss_curve_[-1]
-        if loss > self.best_loss_ - self.tol:
+    def _update_no_improvement_count(self, X_val=None):
+        """Patience rule of ``MLPRegressor``, on the validation score if any."""
+        if X_val is None:
+            score, best_score = -self.loss_curve_[-1], -self.best_loss_
+        else:
+            score, best_score = self.score(X_val), self.best_validation_score_
+            self.validation_scores_.append(score)
+
+        if score < best_score + self.tol:
             self._no_improvement_count += 1
         else:
             self._no_improvement_count = 0
-        self.best_loss_ = min(self.best_loss_, loss)
+
+        self.best_loss_ = min(self.best_loss_, self.loss_curve_[-1])
+        if X_val is not None and score > best_score:
+            self.best_validation_score_ = score
+            self._best_state = copy.deepcopy(self.module_.state_dict())
 
     @contextmanager
     def _local_torch_rng(self):
