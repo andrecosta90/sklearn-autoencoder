@@ -24,6 +24,19 @@ class MaskingNoise(nn.Module):
         return x * (torch.rand_like(x) >= self.p)
 
 
+class GaussianNoise(nn.Module):
+    """Add isotropic Gaussian noise with standard deviation ``std`` while training."""
+
+    def __init__(self, std: float) -> None:
+        super().__init__()
+        self.std = std
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.std == 0:
+            return x
+        return x + self.std * torch.randn_like(x)
+
+
 def mlp(sizes: Sequence[int], activation: type[nn.Module], *, activate_last: bool):
     """Stack of ``Linear`` layers through ``sizes`` with ``activation`` in between."""
     layers: list[nn.Module] = []

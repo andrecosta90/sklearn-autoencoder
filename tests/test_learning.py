@@ -53,3 +53,31 @@ def test_grid_search_selects_hyperparameters_without_targets(low_rank_data):
     ).fit(low_rank_data)
 
     assert search.best_params_ == {"max_iter": 100}
+
+
+def test_masking_autoencoder_repairs_masked_inputs(low_rank_data):
+    rng = np.random.default_rng(1)
+    masked = low_rank_data * (rng.random(low_rank_data.shape) >= 0.3)
+    ae = DenoisingAutoencoder(
+        corruption="masking", noise_level=0.3, random_state=0, device="cpu"
+    ).fit(low_rank_data)
+
+    repaired = ae.inverse_transform(ae.transform(masked))
+
+    assert ((repaired - low_rank_data) ** 2).mean() < 0.5 * (
+        (masked - low_rank_data) ** 2
+    ).mean()
+
+
+def test_gaussian_autoencoder_repairs_noisy_inputs(low_rank_data):
+    rng = np.random.default_rng(1)
+    noisy = low_rank_data + rng.normal(scale=0.5, size=low_rank_data.shape)
+    ae = DenoisingAutoencoder(
+        corruption="gaussian", noise_level=0.5, random_state=0, device="cpu"
+    ).fit(low_rank_data)
+
+    repaired = ae.inverse_transform(ae.transform(noisy))
+
+    assert ((repaired - low_rank_data) ** 2).mean() < 0.5 * (
+        (noisy - low_rank_data) ** 2
+    ).mean()

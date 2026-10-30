@@ -19,10 +19,10 @@ from sklearn.utils.validation import (
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from ._network import Autoencoder, MaskingNoise
+from ._network import Autoencoder, GaussianNoise, MaskingNoise
 
 ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "sigmoid": nn.Sigmoid}
-CORRUPTIONS = {"masking": MaskingNoise}
+CORRUPTIONS = {"masking": MaskingNoise, "gaussian": GaussianNoise}
 
 
 class DenoisingAutoencoder(
@@ -40,10 +40,10 @@ class DenoisingAutoencoder(
         classic denoising autoencoder, several entries a stacked one.
     activation : {"relu", "tanh", "sigmoid"}, default="relu"
         Non-linearity after every hidden layer, including the code.
-    corruption : {"masking"}, default="masking"
+    corruption : {"masking", "gaussian"}, default="masking"
         How inputs are corrupted during training.
     noise_level : float, default=0.3
-        Corruption strength (probability of masking an entry).
+        Corruption strength: masking probability, or Gaussian noise std.
     learning_rate : float, default=1e-3
         Adam learning rate.
     max_iter : int, default=200
