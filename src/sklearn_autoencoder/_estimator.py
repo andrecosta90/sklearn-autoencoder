@@ -134,7 +134,7 @@ class DenoisingAutoencoder(
         self.verbose = verbose
 
     def fit(self, X, y=None):
-        X = validate_data(self, X, dtype=FLOAT_DTYPES)
+        X = self._validate_X(X, reset=True)
         self._initialize(X)
         X_train, X_val = self._split_validation(X)
         X_train = self._to_tensor(X_train)
@@ -152,6 +152,22 @@ class DenoisingAutoencoder(
             )
         if self.early_stopping:
             self.module_.load_state_dict(self._best_state)
+        return self
+
+    def partial_fit(self, X, y=None):
+        """Train for a single epoch over ``X``, initialising on the first call.
+
+        Lets the model learn from data that does not fit in memory, one chunk
+        at a time. Stopping is left to the caller.
+        """
+        if self.early_stopping:
+            raise ValueError("partial_fit does not support early_stopping=True.")
+        first_call = not hasattr(self, "module_")
+        X = self._validate_X(X, reset=first_call)
+        if first_call:
+            self._initialize(X)
+        self._run_epoch(self._to_tensor(X))
+        self._update_no_improvement_count()
         return self
 
     def transform(self, X):
@@ -175,6 +191,12 @@ class DenoisingAutoencoder(
         X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=False)
         return -float(((X - self._predict(self.module_.reconstruct, X)) ** 2).mean())
 
+    def _validate_X(self, X, *, reset):
+        X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=reset)
+        if self.loss == "bce" and (X.min() < 0 or X.max() > 1):
+            raise ValueError("loss='bce' requires X to lie in [0, 1].")
+        return X
+
     def _check_noise_level(self):
         if self.corruption == "masking" and not 0 <= self.noise_level < 1:
             raise ValueError(
@@ -192,8 +214,6 @@ class DenoisingAutoencoder(
         corruption = _lookup(CORRUPTIONS, "corruption", self.corruption)
         criterion, output_activation = _lookup(LOSSES, "loss", self.loss)
         self._check_noise_level()
-        if self.loss == "bce" and (X.min() < 0 or X.max() > 1):
-            raise ValueError("loss='bce' requires X to lie in [0, 1].")
 
         self.device_ = _resolve_device(self.device)
         self._random_state = check_random_state(self.random_state)
