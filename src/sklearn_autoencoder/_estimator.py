@@ -10,7 +10,12 @@ from sklearn.base import (
     TransformerMixin,
 )
 from sklearn.utils import check_random_state
-from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted, validate_data
+from sklearn.utils.validation import (
+    FLOAT_DTYPES,
+    check_array,
+    check_is_fitted,
+    validate_data,
+)
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -111,6 +116,16 @@ class DenoisingAutoencoder(
         check_is_fitted(self)
         X = validate_data(self, X, dtype=FLOAT_DTYPES, reset=False)
         return self._predict(self.module_.encoder, X)
+
+    def inverse_transform(self, X):
+        check_is_fitted(self)
+        X = check_array(X, dtype=FLOAT_DTYPES)
+        if X.shape[1] != self._n_features_out:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but {type(self).__name__} "
+                f"expects codes with {self._n_features_out} features."
+            )
+        return self._predict(self.module_.decoder, X)
 
     def _train(self, X: torch.Tensor) -> list[float]:
         loader = DataLoader(
